@@ -19,6 +19,7 @@ namespace MQTTnet.Client
         private readonly Stopwatch _sendTracker = new Stopwatch();
         private readonly object _disconnectLock = new object();
         private readonly MqttPacketDispatcher _packetDispatcher = new MqttPacketDispatcher();
+        private readonly ManualResetEvent _disconnectedResetEvent = new ManualResetEvent(true);
 
         private readonly IMqttClientAdapterFactory _adapterFactory;
         private readonly IMqttNetChildLogger _logger;
@@ -29,6 +30,7 @@ namespace MQTTnet.Client
         private Task _keepAliveMessageSenderTask;
         private IMqttChannelAdapter _adapter;
         private bool _cleanDisconnectInitiated;
+        private Exception _disconnectReason;
 
         public MqttClient(IMqttClientAdapterFactory channelFactory, IMqttNetLogger logger)
         {
@@ -57,6 +59,9 @@ namespace MQTTnet.Client
                 _options = options;
                 _packetIdentifierProvider.Reset();
                 _packetDispatcher.Reset();
+                _disconnectedResetEvent.Reset();
+
+                _cancellationTokenSource.Token.Register(async () => await DisconnectInternalAsync());
 
                 _adapter = _adapterFactory.CreateClientAdapter(options, _logger);
 
@@ -85,7 +90,9 @@ namespace MQTTnet.Client
             catch (Exception exception)
             {
                 _logger.Error(exception, "Error while connecting with server.");
-                await DisconnectInternalAsync(null, exception).ConfigureAwait(false);
+                InitiateDisconnect(exception);
+
+                _disconnectedResetEvent.WaitOne();
 
                 throw;
             }
@@ -104,7 +111,9 @@ namespace MQTTnet.Client
             }
             finally
             {
-                await DisconnectInternalAsync(null, null).ConfigureAwait(false);
+                InitiateDisconnect(null);
+
+                _disconnectedResetEvent.WaitOne();
             }
         }
 
@@ -213,17 +222,12 @@ namespace MQTTnet.Client
             if (IsConnected) throw new MqttProtocolViolationException(message);
         }
 
-        private async Task DisconnectInternalAsync(Task sender, Exception exception)
+        private async Task DisconnectInternalAsync()
         {
-            InitiateDisconnect();
-
-            var clientWasConnected = IsConnected;
-            IsConnected = false;
-
             try
             {
-                await WaitForTaskAsync(_packetReceiverTask, sender).ConfigureAwait(false);
-                await WaitForTaskAsync(_keepAliveMessageSenderTask, sender).ConfigureAwait(false);
+                await WaitForTaskAsync(_packetReceiverTask).ConfigureAwait(false);
+                await WaitForTaskAsync(_keepAliveMessageSenderTask).ConfigureAwait(false);
 
                 if (_adapter != null)
                 {
@@ -245,11 +249,18 @@ namespace MQTTnet.Client
                 _cleanDisconnectInitiated = false;
 
                 _logger.Info("Disconnected.");
-                Disconnected?.Invoke(this, new MqttClientDisconnectedEventArgs(clientWasConnected, exception));
+
+                Disconnected?.Invoke(this, new MqttClientDisconnectedEventArgs(IsConnected, _disconnectReason));
+
+                _disconnectReason = null;
+
+                IsConnected = false;
+
+                _disconnectedResetEvent.Set();
             }
         }
 
-        private void InitiateDisconnect()
+        private void InitiateDisconnect(Exception exception)
         {
             lock (_disconnectLock)
             {
@@ -260,6 +271,7 @@ namespace MQTTnet.Client
                         return;
                     }
 
+                    _disconnectReason = exception;
                     _cancellationTokenSource.Cancel(false);
                 }
                 catch (Exception adapterException)
@@ -352,7 +364,7 @@ namespace MQTTnet.Client
                     _logger.Error(exception, "Unhandled exception while sending/receiving keep alive packets.");
                 }
 
-                await DisconnectInternalAsync(_keepAliveMessageSenderTask, exception).ConfigureAwait(false);
+                InitiateDisconnect(exception);
             }
             finally
             {
@@ -395,7 +407,7 @@ namespace MQTTnet.Client
                 }
 
                 _packetDispatcher.Dispatch(exception);
-                await DisconnectInternalAsync(_packetReceiverTask, exception).ConfigureAwait(false);
+                InitiateDisconnect(exception);
             }
             finally
             {
@@ -503,9 +515,9 @@ namespace MQTTnet.Client
             }
         }
 
-        private static async Task WaitForTaskAsync(Task task, Task sender)
+        private static async Task WaitForTaskAsync(Task task)
         {
-            if (task == sender || task == null)
+            if (task == null)
             {
                 return;
             }
