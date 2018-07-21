@@ -68,8 +68,14 @@ namespace MQTTnet.Core.Tests
                 Assert.IsInstanceOfType(ex, typeof(MqttConnectingFailedException));
             }
 
-            Assert.IsTrue(client._packetReceiverTask == null || client._packetReceiverTask.IsCompleted, "receive loop not completed");
-            Assert.IsTrue(client._keepAliveMessageSenderTask == null || client._keepAliveMessageSenderTask.IsCompleted, "keepalive loop not completed");
+            var packetReceiverTaskInfo = typeof(MqttClient).GetField("_packetReceiverTask", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            var keepAliveMessageSenderTaskInfo = typeof(MqttClient).GetField("_keepAliveMessageSenderTask", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+            var packetReceiverTask = packetReceiverTaskInfo.GetValue(client) as Task;
+            var keepAliveMessageSenderTask = keepAliveMessageSenderTaskInfo.GetValue(client) as Task;
+
+            Assert.IsTrue(packetReceiverTask == null || packetReceiverTask.IsCompleted, "receive loop not completed");
+            Assert.IsTrue(keepAliveMessageSenderTask == null || keepAliveMessageSenderTask.IsCompleted, "keepalive loop not completed");
         }
     }
 }
