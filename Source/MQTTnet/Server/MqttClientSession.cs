@@ -29,7 +29,6 @@ namespace MQTTnet.Server
         private MqttApplicationMessage _willMessage;
         private bool _wasCleanDisconnect;
         private IMqttChannelAdapter _adapter;
-        private Task<bool> _workerTask;
         private IDisposable _cleanupHandle;
 
         public MqttClientSession(
@@ -67,13 +66,7 @@ namespace MQTTnet.Server
             status.LastNonKeepAlivePacketReceived = _keepAliveMonitor.LastNonKeepAlivePacketReceived;
         }
 
-        public Task<bool> RunAsync(MqttConnectPacket connectPacket, IMqttChannelAdapter adapter)
-        {
-            _workerTask = RunInternalAsync(connectPacket, adapter);
-            return _workerTask;
-        }
-
-        private async Task<bool> RunInternalAsync(MqttConnectPacket connectPacket, IMqttChannelAdapter adapter)
+        public async Task<bool> RunAsync(MqttConnectPacket connectPacket, IMqttChannelAdapter adapter)
         {
             if (connectPacket == null) throw new ArgumentNullException(nameof(connectPacket));
             if (adapter == null) throw new ArgumentNullException(nameof(adapter));
@@ -87,7 +80,7 @@ namespace MQTTnet.Server
                 _cancellationTokenSource = new CancellationTokenSource();
 
                 //woraround for https://github.com/dotnet/corefx/issues/24430
-                _cleanupHandle = _cancellationTokenSource.Token.Register(() => Cleanup());
+                _cleanupHandle = _cancellationTokenSource.Token.Register(async () => await Cleanup().ConfigureAwait(false));
                 //endworkaround
                 _wasCleanDisconnect = false;
                 _willMessage = connectPacket.WillMessage;
@@ -130,14 +123,7 @@ namespace MQTTnet.Server
             }
             finally
             {
-                if (_adapter != null)
-                {
-                    _adapter.ReadingPacketStarted -= OnAdapterReadingPacketStarted;
-                    _adapter.ReadingPacketCompleted -= OnAdapterReadingPacketCompleted;
-                    await Cleanup().ConfigureAwait(false);
-                }
-
-                _adapter = null;
+                await Cleanup().ConfigureAwait(false);
 
                 _cleanupHandle?.Dispose();
                 _cleanupHandle = null;
@@ -153,8 +139,15 @@ namespace MQTTnet.Server
         {
             try
             {
-                await _adapter.DisconnectAsync(_options.DefaultCommunicationTimeout, CancellationToken.None).ConfigureAwait(false);
-                _adapter.Dispose();
+                if (_adapter != null)
+                {
+                    await _adapter.DisconnectAsync(_options.DefaultCommunicationTimeout, CancellationToken.None).ConfigureAwait(false);
+                    _adapter.ReadingPacketStarted -= OnAdapterReadingPacketStarted;
+                    _adapter.ReadingPacketCompleted -= OnAdapterReadingPacketCompleted;
+                    _adapter.Dispose();
+
+                    _adapter = null;
+                }
             }
             catch (Exception exception)
             {
@@ -182,8 +175,6 @@ namespace MQTTnet.Server
                 }
 
                 _willMessage = null;
-
-                _workerTask?.GetAwaiter().GetResult();
             }
             finally
             {

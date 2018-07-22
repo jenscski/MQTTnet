@@ -97,11 +97,11 @@ namespace MQTTnet.Core.Tests
                 c1.ApplicationMessageReceived += (_, __) => receivedMessagesCount++;
 
                 var message = new MqttApplicationMessageBuilder().WithTopic("a").WithAtLeastOnceQoS().Build();
-                
+
                 await c2.PublishAsync(message);
                 await Task.Delay(1000);
                 Assert.AreEqual(0, receivedMessagesCount);
-                
+
                 var subscribeEventCalled = false;
                 s.ClientSubscribedTopic += (_, e) =>
                     {
@@ -115,7 +115,7 @@ namespace MQTTnet.Core.Tests
                 await c2.PublishAsync(message);
                 await Task.Delay(500);
                 Assert.AreEqual(1, receivedMessagesCount);
-                
+
                 var unsubscribeEventCalled = false;
                 s.ClientUnsubscribedTopic += (_, e) =>
                 {
@@ -233,7 +233,7 @@ namespace MQTTnet.Core.Tests
                 await c1.PublishAsync(message);
             }
         }
-        
+
         [TestMethod]
         public async Task MqttServer_ShutdownDisconnectsClientsGracefully()
         {
@@ -260,6 +260,46 @@ namespace MQTTnet.Core.Tests
             await Task.Delay(100);
 
             Assert.AreEqual(1, disconnectCalled);
+        }
+
+        [TestMethod]
+        public async Task MqttServer_Sessionasdfasdf()
+        {
+            MqttNetGlobalLogger.LogMessagePublished += (_, e) =>
+            {
+                System.Diagnostics.Debug.WriteLine($"[{e.TraceMessage.Timestamp:s}] {e.TraceMessage.Source} {e.TraceMessage.Message}");
+            };
+
+            var serverAdapter = new MqttTcpServerAdapter(new MqttNetLogger().CreateChildLogger());
+            var s = new MqttFactory().CreateMqttServer(new[] { serverAdapter }, new MqttNetLogger());
+
+            var clientConnectedCalled = 0;
+            var clientDisconnectedCalled = 0;
+
+            s.ClientConnected += (_, __) => clientConnectedCalled++;
+            s.ClientDisconnected += (_, __) => clientDisconnectedCalled++;
+
+            var clientOptions = new MqttClientOptionsBuilder()
+                .WithTcpServer("localhost")
+                .Build();
+
+            await s.StartAsync(new MqttServerOptions());
+
+            var c1 = new MqttFactory().CreateMqttClient();
+
+            await c1.ConnectAsync(clientOptions);
+
+            await Task.Delay(100);
+
+            await c1.DisconnectAsync();
+
+            await Task.Delay(100);
+
+            await s.StopAsync();
+
+            await Task.Delay(100);
+
+            Assert.AreEqual(clientConnectedCalled, clientDisconnectedCalled);
         }
 
         [TestMethod]
